@@ -1,0 +1,180 @@
+etcdctl --ca-file=/k8s/ssl/ca.pem --cert-file=/k8s/ssl/etcd.pem --key-file=/k8s/ssl/etcd-key.pem cluster-health
+
+
+
+
+办公机内网docker安装流程：
+1./etc/yum.repos.d/docker-ce.repo
+
+[docker-ce-stable]
+name=Docker CE Stable - $basearch
+baseurl=https://download.docker.com/linux/centos/7/$basearch/stable
+enabled=1
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+
+[docker-ce-stable-debuginfo]
+name=Docker CE Stable - Debuginfo $basearch
+baseurl=https://download.docker.com/linux/centos/7/debug-$basearch/stable
+enabled=0
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+
+[docker-ce-stable-source]
+name=Docker CE Stable - Sources
+baseurl=https://download.docker.com/linux/centos/7/source/stable
+enabled=0
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+
+[docker-ce-edge]
+name=Docker CE Edge - $basearch
+baseurl=https://download.docker.com/linux/centos/7/$basearch/edge
+enabled=0
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+
+[docker-ce-edge-debuginfo]
+name=Docker CE Edge - Debuginfo $basearch
+baseurl=https://download.docker.com/linux/centos/7/debug-$basearch/edge
+enabled=0
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+
+[docker-ce-edge-source]
+name=Docker CE Edge - Sources
+baseurl=https://download.docker.com/linux/centos/7/source/edge
+enabled=0
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+
+[docker-ce-test]
+name=Docker CE Test - $basearch
+baseurl=https://download.docker.com/linux/centos/7/$basearch/test
+enabled=1
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+
+[docker-ce-test-debuginfo]
+name=Docker CE Test - Debuginfo $basearch
+baseurl=https://download.docker.com/linux/centos/7/debug-$basearch/test
+enabled=0
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+
+[docker-ce-test-source]
+name=Docker CE Test - Sources
+baseurl=https://download.docker.com/linux/centos/7/source/test
+enabled=0
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+
+[docker-ce-nightly]
+name=Docker CE Nightly - $basearch
+baseurl=https://download.docker.com/linux/centos/7/$basearch/nightly
+enabled=1
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+
+[docker-ce-nightly-debuginfo]
+name=Docker CE Nightly - Debuginfo $basearch
+baseurl=https://download.docker.com/linux/centos/7/debug-$basearch/nightly
+enabled=0
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+
+[docker-ce-nightly-source]
+name=Docker CE Nightly - Sources
+baseurl=https://download.docker.com/linux/centos/7/source/nightly
+enabled=0
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/centos/gpg
+
+
+2.yum install -y yum-utils device-mapper-persistent-data lvm2
+
+
+yum -y install /opt/share-vm/Samsung-master/container-selinux-2.107-3.el7.noarch.rpm
+
+ yum -y install docker-ce docker-ce-cli.x86_64 containerd.io.x86_64
+ 
+ 
+3.mkdir -p /etc/systemd/system/docker.service.d/ 
+
+vim  http-proxy.conf
+[Service]
+Environment="HTTP_PROXY=http://109.131.7.11:8080"
+
+vim https-proxy.conf
+[Service]
+Environment="HTTPS_PROXY=http://109.131.7.11:8080"
+
+4.配置docker私有仓库  
+拉取仓库镜像 docker pull registry
+启动镜像  docker run -d -p 5000:5000 --restart=always -v /mnt/registry:/var/lib/registry --name registry registry:latest
+
+
+
+
+vim /etc/docker/daemon.json
+{
+  "insecure-registries": ["192.168.1.5:5000"]
+}
+
+(添加registry-mirror 要加逗号)
+
+重启docker   docker info验证一下
+
+上传镜像到私有仓库：
+docker pull busybox
+
+docker tag busybox:latest 192.168.1.5:5000/busybox
+docker push 192.168.1.5:5000/busybox
+
+
+
+5.匿名用户无法访问问题：
+执行：kubectl create clusterrolebinding system:anonymous  --clusterrole=cluster-admin   --user=system:anonymous
+
+
+
+6.
+①nodeport:
+用于外部流量访问集群，nodeIP:nodeport 即为提供给外部流量访问k8s集群中services的入口
+比如外部用户要访问集群中的web应用，可以配置 services的type为nodeport，nodeport=30001,其他用户就可以使用浏览器访问
+http://nodeIP:30001  访问到该服务。
+（对于数据库等内部服务，不应暴露到外部，所以一般不必设置这类services的nodeport）
+
+
+②port：
+k8s集群内部服务之间访问service的入口。即
+clusterIP:port 是service暴露在clusterIP上的端口，如mysql容器暴露在集群的端口是3306，配置其 port:3307
+则表示集群内其他容器通过3307端口访问mysql服务（clusterIP:3307）
+但是外部流量不能访问mysql服务，因为未配置nodeport.
+
+
+
+
+例如
+kubectl expose deployment hyd --external-ip='192.168.1.10' --port=3309 --target-port=8000
+external-ip应该是node节点的内网IP，node间可以通信
+
+
+③targetPort:
+容器的端口（最终的流量端口），targetPort是pod上的端口，从port和nodePort上来的流量，经过kube-proxy流入到后端pod的targetPort上，最终进入容器.制作容器时（DockerFile的EXPOSE）暴露的端口与targetPort一致，亦即targetPort一般为容器内部承载的应用的服务端口。
+
+
+④hostPort:
+一种直接定义pod网络的方式。hostPort是直接将容器的端口与所调度的节点上面的端口进行路由，使得用户可以使用宿主机的IP加hostPort 来访问Pod -->这样的和pod重新调度时，如果宿主机变动，可能会产生端口冲突的问题，新宿主机已调用了原来的hostport端口
+需要维护一个pod与宿主机的对应关系，不方便
+
+
+⑤总结：
+
+port 和nodePort 都是service的端口，但是port是暴露给k8s集群内部进行访问的,由于clusterIp会变化，因此不适宜配置这个IP进行访问
+nodeport暴露给集群外部，或者说外网的流量访问
+从以上两个端口过来的数据需要反向代理经过kube-proxy 流入到后端Pod的targetport上面。
+
+
+
+7.ClusterIp会一直变化
