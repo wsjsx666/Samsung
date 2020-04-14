@@ -1,0 +1,408 @@
+返回主页
+名字都被注册了
+奈良鹿丸：我就是我，你就是你，总是在意别人说什么，是件很无趣的事，只要顺其自然快乐过活就好。 欢迎加群交流 QQ：909547979
+博客园
+首页
+新随笔
+联系
+订阅
+管理
+Kubernetes 系列（六）:Kubernetes部署Prometheus监控
+1.创建命名空间
+
+新建一个yaml文件命名为monitor-namespace.yaml，写入如下内容：
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+执行如下命令创建monitoring命名空间：
+
+kubectl create -f monitor-namespace.yaml
+2.创建ClusterRole
+
+你需要对上面创建的命名空间分配集群的读取权限，以便Prometheus可以通过Kubernetes的API获取集群的资源目标。
+
+新建一个yaml文件命名为cluster-role.yaml，写入如下内容：
+
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+- apiGroups: [""]
+  resources:
+  - nodes
+  - nodes/proxy
+  - services
+  - endpoints
+  - pods
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - extensions
+  resources:
+  - ingresses
+  verbs: ["get", "list", "watch"]
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: monitoring
+执行如下命令创建:
+
+kubectl create -f cluster-role.yaml
+ 
+
+3.创建Config Map
+
+我们需要创建一个Config Map保存后面创建Prometheus容器用到的一些配置，这些配置包含了从Kubernetes集群中动态发现pods和运行中的服务。
+新建一个yaml文件命名为config-map.yaml，写入如下内容：
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-server-conf
+  labels:
+    name: prometheus-server-conf
+  namespace: monitoring
+data:
+  prometheus.yml: |-
+    global:
+      scrape_interval: 5s
+      evaluation_interval: 5s
+    scrape_configs:
+      - job_name: 'kubernetes-apiservers'
+        kubernetes_sd_configs:
+        - role: endpoints
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: default;kubernetes;https
+
+      - job_name: 'kubernetes-nodes'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+        - role: node
+        relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+        - target_label: __address__
+          replacement: kubernetes.default.svc:443
+        - source_labels: [__meta_kubernetes_node_name]
+          regex: (.+)
+          target_label: __metrics_path__
+          replacement: /api/v1/nodes/${1}/proxy/metrics
+      
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+        - role: pod
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          action: keep
+          regex: true
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+          action: replace
+          target_label: __metrics_path__
+          regex: (.+)
+        - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          action: replace
+          regex: ([^:]+)(?::\d+)?;(\d+)
+          replacement: $1:$2
+          target_label: __address__
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_(.+)
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: kubernetes_namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          action: replace
+          target_label: kubernetes_pod_name
+
+      - job_name: 'kubernetes-cadvisor'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        kubernetes_sd_configs:
+        - role: node
+        relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+        - target_label: __address__
+          replacement: kubernetes.default.svc:443
+        - source_labels: [__meta_kubernetes_node_name]
+          regex: (.+)
+          target_label: __metrics_path__
+          replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+      
+      - job_name: 'kubernetes-service-endpoints'
+        kubernetes_sd_configs:
+        - role: endpoints
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+          action: keep
+          regex: true
+        - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scheme]
+          action: replace
+          target_label: __scheme__
+          regex: (https?)
+        - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+          action: replace
+          target_label: __metrics_path__
+          regex: (.+)
+        - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+          action: replace
+          target_label: __address__
+          regex: ([^:]+)(?::\d+)?;(\d+)
+          replacement: $1:$2
+        - action: labelmap
+          regex: __meta_kubernetes_service_label_(.+)
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: kubernetes_namespace
+        - source_labels: [__meta_kubernetes_service_name]
+          action: replace
+          target_label: kubernetes_name
+执行如下命令进行创建:
+
+kubectl create -f config-map.yaml -n monitoring
+ 
+
+4.创建Deployment模式的Prometheus
+
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: prometheus-deployment
+  namespace: monitoring
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: prometheus-server
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.3.2
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus/"
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: prometheus-config-volume
+              mountPath: /etc/prometheus/
+            - name: prometheus-storage-volume
+              mountPath: /prometheus/
+      volumes:
+        - name: prometheus-config-volume
+          configMap:
+            defaultMode: 420
+            name: prometheus-server-conf  
+        - name: prometheus-storage-volume
+          emptyDir: {}
+使用如下命令部署:
+
+kubectl create -f prometheus-deployment.yaml --namespace=monitoring
+部署完成后通过dashboard能够看到如下的界面：
+
+
+
+5.连接Prometheus
+这里有两种方式
+
+1.通过kubectl命令进行端口代理
+
+2.针对Prometheus的POD暴露一个服务，推荐此种方式
+首先新建一个yaml文件命名为prometheus-service.yaml，写入如下内容：
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-service
+spec:
+  selector: 
+    app: prometheus-server
+  type: NodePort
+  ports:
+    - port: 9090
+      targetPort: 9090 
+      nodePort: 30909
+执行如下命令创建服务:
+
+kubectl create -f prometheus-service.yaml --namespace=monitoring
+通过以下命令查看Service的状态，我们可以看到暴露的端口是30909：
+
+kubectl get svc -n monitoring
+NAME                 TYPE       CLUSTER-IP       EXTERNAL-IP   PORT(S)          AGE
+prometheus-service   NodePort   10.101.186.82    <none>        9090:30909/TCP   100m
+现在可以通过浏览器访问【http://虚拟机IP:30909】，看到如下界面，现在可以点击 status –> Targets，马上就可以看到所有Kubernetes集群上的Endpoint通过服务发现的方式自动连接到了Prometheus。：
+
+
+
+我们还可以通过图形化界面查看内存：
+
+
+
+OK，到这里Prometheus部署就算完成了，但是数据的统计明显不够直观，所以我们需要使用Grafana来构建更加友好的监控页面。
+
+ 
+
+6.搭建Grafana
+新建以下yaml文件：grafana-dashboard-provider.yaml
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: monitoring
+data:
+  default-dashboard.yaml: |
+    - name: 'default'
+      org_id: 1
+      folder: ''
+      type: file
+      options:
+        folder: /var/lib/grafana/dashboards
+grafana.yaml：
+
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+    component: core
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: grafana
+        component: core
+    spec:
+      containers:
+        - image: grafana/grafana:5.0.0
+          name: grafana
+          ports:
+          - containerPort: 3000
+          resources:
+            limits:
+              cpu: 100m
+              memory: 100Mi
+            requests:
+              cpu: 100m
+              memory: 100Mi
+          volumeMounts:
+          - name: grafana-persistent-storage
+            mountPath: /var
+          - name: grafana-dashboard-provider
+            mountPath: /etc/grafana/provisioning/dashboards
+      volumes:
+      - name: grafana-dashboard-provider
+        configMap:
+          name: grafana-dashboard-provider
+      - name: grafana-persistent-storage
+        emptyDir: {}
+grafana-service.yaml：
+
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    name: grafana
+  name: grafana
+  namespace: monitoring
+spec:
+  type: NodePort
+  selector:
+    app: grafana
+  ports:
+  - protocol: TCP
+    port: 3000
+    targetPort: 3000
+    nodePort: 30300
+执行如下命令进行创建：
+
+kubectl apply -f grafana-dashboard-provider.yaml 
+kubectl apply -f grafana.yaml 
+kubectl apply -f grafana-service.yaml
+部署完成后通过Kubernetes Dashboard可以看到:
+
+
+
+ 
+
+ 根据服务暴露出来的端口30300通过浏览器访问【http://虚拟机IP:30300】看到如下界面：
+
+
+
+输入用户名和密码（admin/admin）即可登录。
+
+
+
+接着我们配置数据源：
+
+
+
+
+
+
+
+ 
+
+ 然后导入Dashboards：
+
+
+
+
+
+将JSON文件上传
+
+grafana-dashboard.json （百度云链接 https://pan.baidu.com/s/1YtfD3s1U_d6Yon67qjihmw   密码：n25f）
+然后点击导入：
+
+
+
+然后就可以看到Kubernetes集群的监控数据了：
+
+
+
+ 
+
+还有一个资源统计的Dashboards：
+
+kubernetes-resources-usage-dashboard.json
+
+ 
+
+OK，Prometheus的监控搭建到此结束。
+
+ 
+
+参考资料：https://www.jianshu.com/p/c2e549480c50
+
+posted @ 2019-03-31 00:53  名字都被注册了  阅读(...)  评论(...)  编辑  收藏
+刷新评论刷新页面返回顶部
+
+Copyright © 2020 名字都被注册了
+Powered by .NET Core on Kubernetes
