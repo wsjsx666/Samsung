@@ -1,0 +1,205 @@
+1.pip install requests --trusted-host files.pythonhosted.org --trusted-host pypi.org 
+--proxy http://109.131.7.11:8080
+ 
+ 注意，trust-host不要加http、https
+ 
+ 
+2.docker的修改，逐层描摹的方式，盖上玻璃在原有镜像上描摹，可选择提交或者放弃，提交则再盖一层玻璃
+如果需要对某个应用版本进行更新，可以仅对涉及该应用的那一层进行变更
+
+3.镜像导入：
+cat centos-7-x86_64-docker.tar.xz|docker import - centos:import
+
+docker load < image.tar
+   
+ 保存镜像：
+docker save -o jira-v2.tar.gz jira:v2 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+4.nginx docker file：
+FROM centos7:latest
+ADD rpmbulid_nginx.tar.gz /
+RUN rpm -ivh /rpmbulid_nginx/RPMS/x86_64/nginx-1.12.2-101.x86_64.rpm
+ENV PATH /usr/local/nginx/sbin:$PATH
+CMD ["nginx","-g","daemon off;"]
+
+
+5.dockerfile-all:
+FROM centos7:latest
+MAINTAINER Jsx
+ADD rpmbulid_nginx.tar.gz /
+COPY python3.7 /usr/local/python3.7
+COPY T2devops /T2devops
+RUN rpm -ivh /rpmbulid_nginx/RPMS/x86_64/nginx-1.12.2-101.x86_64.rpm
+RUN chown -R nginx.nginx /T2devops              
+COPY nginx.conf /usr/local/nginx/conf/
+COPY startup.sh /startup.sh
+RUN  ln -s  /usr/local/python3.7/bin/python3.7 /usr/bin/python3
+RUN  ln -s /usr/local/python3.7/bin/uwsgi /usr/bin/uwsgi
+RUN  mkdir -p /var/run/T2devops /var/log/T2devops/uwsgi
+ENV PATH /usr/local/nginx/sbin:$PATH
+ENTRYPOINT /startup.sh
+
+(cat  startup.sh
+#/bin/bash
+uwsgi --ini /T2devops/script/uwsgi.ini
+nginx -g "daemon off;“)
+
+
+
+5.uwsgi.ini
+[uwsgi]
+home=/usr/local/python3.7
+#指定py目录，不指定默认使用系统自带2.7
+
+chdir=/T2devops
+#在app加载前切换到当前目录， 指定运行目录
+
+module=T2devops.wsgi:application
+# 加载一个WSGI模块
+
+master=true
+#启动主进程，来管理其他进程，其它的uwsgi进程都是这个master进程的子进程，如果kill这个master进程，相当于重启所有的uwsgi进程。
+
+pidfile=/var/run/T2devops/master.pid
+#指定pid存储目录
+processes = 16
+
+#启动2个工作进程，生成指定数目的worker/进程
+
+listen = 128
+#设置socket的监听队列大小（默认：100），与本机设置相关
+
+socket = /var/run/T2devops/app.sock
+#指定socket文件，也可以指定为127.0.0.1:9000，这样就会监听到网络套接字   --> 与nginx配置对应
+
+vacuum=True
+#当服务器退出的时候自动删除unix socket文件和pid文件。
+
+daemonize= /var/log/T2devops/uwsgi/uwsgi.log
+# 使进程在后台运行，并将日志打到指定的日志文件中
+
+
+6.linux下获取占用CPU资源最多的10个进程，可以使用如下命令组合：
+
+ps aux|head -1;ps aux|grep -v PID|sort -rn -k +3|head
+
+启动gitlab docker run -itd -p 3307:443 -p 3308:80 -p 3309:22 --name gitlab -v /root/devops/gitlab/config/:/etc/gitlab -v /root/devops/gitlab/data/:/var/opt/gitlab -v /root/devops/gitlab/logs/:/var/log/gitlab gitlab/gitlab-ce:latest
+
+
+7.安装docker   
+导入 sgmc.cer的证书，准备好container-selinux 依赖包，配置yum源
+ 
+ yum install docker-ce docker-ce-cli containerd.io
+ 
+ 
+ 8.jenkins:
+ docker run -itd -u root -p 33:8080 -p 333:50000 -v /root/devops/jenkins_home/:/var/jenkins_home jenkins
+ 
+ 
+ 
+ 9.iptables
+ SNAT,源目标地址转换（POSTROUNTING 路由后）：iptables -t nat -A POSTROUTING -s 10.0.3.15  -p tcp --sport 3306 -j SNAT --to-source 192.168.1.5:80
+ DNAT，目标地址转换（PREROUTING  路由前）：iptables -t nat -A PREROUTING --destination 192.168.1.5 -p tcp --dport 80 -j DNAT --to-destination 10.0.3.15:3306
+ 
+10.配置交换文件/分区
+交换文件 dd if=/dev/zero of=/swapfile bs=1M count=4096  (4G)
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+vim /etc/fstab :   /swapfile swap swap default 0 0
+ echo 100 > /proc/sys/vm/swappiness   使用交换分区的积极性最大化
+交换分区
+mkswap /dev/sda2
+swapon /dev/sda2
+vim /etc/fstab :   /dev/sda2 swap swap default 0 0
+
+
+11.awk调用shell变量，shell变量要  双引号加单引号引起来  "'$var'"
+如果shell变量含空格  则要再加一层双引号   "'"$var"'"
+
+
+12.统计账单数（UPC）：
+awk -F= /productName=/'{name[$2]++}END{for (n in name)print "productname=",n",","sum=",name[n]}'  /iosp/comp/billing-mop-web/logs/catalina.out.2019-07-02       用双引号扩起你需要额外输出的自定义内容
+
+
+awk -F= /productName=/'{name[$2]++}END{for (n in name)print n,name[n]}'  /iosp/comp/billing-mop-web/logs/catalina.out.2019-07-02|awk '{print $NF,$0}'|sort -n
+
+
+awk -F= /productName=/'{n[$2]++}END{for (i in n)print i,n[i]}' /iosp/comp/billing-mop-web/logs/catalina.out.2019-07-22|awk '{print $NF,$0}'|sort -n|awk '{sum=sum+$1}END{print sum}'
+
+
+
+查看进程：ps -efww|grep java |sed  's/\s/\n/g'|grep -v ^$
+
+
+12.SimpleHTTPServer使用方法
+
+　　1）进入待分享的目录 
+　　2）执行命令python -m SimpleHTTPServer 端口号 
+　　　　注意：不填端口号则默认使用8000端口。 
+　　3）浏览器访问该主机的地址：http://IP:端口号/
+
+示例：执行命令
+
+# cd /home/abc 
+# python -m SimpleHTTPServer 8000
+Serving HTTP on 0.0.0.0 port 8000
+浏览器打开，可以看到分享的目录内容
+点击jdk-7u79-linux-x64.tar.gz，下载成功。
+
+使用时还要注意Linux的防火墙因素。
+
+
+
+
+
+
+
+13.cat /proc/cpuinfo |grep "physical id"|uniq |wc -l  查看cpu个数
+ cat /proc/cpuinfo |grep "cpu cores"|uniq  查看cpu核数
+ cat /proc/cpuinfo |grep "model name"|uniq 查看cpu型号
+ 
+ 
+ 
+1.容器运行：docker run -itd -v /usr/local/python3.7:/usr/local/python3.7:rw nginx:add_proxy
+
+2.uswgi.ini              
+[uwsgi]
+home=/usr/local/python3.7
+chdir=/usr/share/T2devops
+module=T2devops.wsgi:application
+master=true
+pidfile=/var/run/T2devops/master.pid
+processes = 16
+listen = 128
+socket = /var/run/T2devops/app.sock
+vacuum=True
+daemonize= /var/log/T2devops/uwsgi/uwsgi.log
+
+py-home为完整目录，日志和run目录要先建
+3.docker run -itd -p 666:8000 jira:v2
+docker exec -it /bin/bash
+
+
+4.docker cp 要拷贝的文件路径 容器名:/要拷贝到容器里面的对应路径
+
+
+
+5.DOCKERFILE
+ADD 和COPY类似，但是ADD会将文件解压，无法操作zip，可以解压tar
+
+RUN中多条命令最好写在同一个RUN下，防止镜像层数太多
