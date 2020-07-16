@@ -1,0 +1,3 @@
+FROM centos:latest
+MAINTAINER Jsx
+RUN yum -y install expect && ln -s /usr/bin/expect /root/expect
