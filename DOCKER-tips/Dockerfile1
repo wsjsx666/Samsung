@@ -1,0 +1,18 @@
+FROM centos7:latest
+MAINTAINER Jsx
+ADD rpmbulid_nginx.tar.gz /
+COPY python3.7 /usr/local/python3.7
+COPY T2devops /T2devops
+RUN rpm -ivh /rpmbulid_nginx/RPMS/x86_64/nginx-1.12.2-101.x86_64.rpm;chown -R nginx.nginx /T2devops
+COPY nginx.conf /usr/local/nginx/conf/
+COPY startup.sh /startup.sh
+RUN  ln -s  /usr/local/python3.7/bin/python3.7 /usr/bin/python3;ln -s /usr/local/python3.7/bin/uwsgi /usr/bin/uwsgi;mkdir -p /var/run/T2devops /var/log/T2devops/uwsgi
+ENV PATH /usr/local/nginx/sbin:$PATH
+ENTRYPOINT /startup.sh
+
+
+
+(cat  startup.sh
+#!/bin/bash
+uwsgi --ini /T2devops/script/uwsgi.ini
+nginx -g "daemon off;")
