@@ -16,3 +16,4 @@ ENTRYPOINT /startup.sh
 #!/bin/bash
 uwsgi --ini /T2devops/script/uwsgi.ini
 nginx -g "daemon off;")
+
